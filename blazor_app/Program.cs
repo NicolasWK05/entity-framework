@@ -57,23 +57,28 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 
 builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSender>();
 
-builder.Services.AddAuthorization(options => {
-    options.AddPolicy("AuthenticatedUser", policy => {
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AuthenticatedUser", policy =>
+    {
         policy.RequireAuthenticatedUser();
     });
-    options.AddPolicy("RequireAdministratorRole", policy => {
+    options.AddPolicy("RequireAdministratorRole", policy =>
+    {
         policy.RequireRole("Admin");
     });
 });
 
-builder.Services.AddSingleton<IFido2>(_ => {
+builder.Services.AddSingleton<IFido2>(_ =>
+{
     return new Fido2(new Fido2Configuration
     {
         ServerDomain = "localhost",
         ServerName = "My Blazor App",
         Origins = new HashSet<string>
         {
-            "https://localhost:7228"
+            "https://localhost:7228",
+            "https://[::1]:7228"
         }
     });
 });
@@ -84,14 +89,15 @@ builder.Services.AddScoped(sp =>
     return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
 });
 
-string kestrelCertPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".aspnet\https\Niels.pfx");
-string kestrelCertPassword = "Niels@1";
+string kestrelCertPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".aspnet/https/Test.pfx");
+string kestrelCertPassword = "test";
 
 builder.WebHost.ConfigureKestrel(options =>
 {
     // HTTPS listener - accept connections on all network interfaces (0.0.0.0 and IPv6 equivalents)
     options.ListenAnyIP(7228, listenOptions =>
     {
+        Console.WriteLine(kestrelCertPath);
         // Load certificate
         var cert = new X509Certificate2(kestrelCertPath, kestrelCertPassword);
 
@@ -132,7 +138,8 @@ app.MapRazorComponents<App>()
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
 
-app.MapPost("/webauthn/register/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) => {
+app.MapPost("/webauthn/register/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) =>
+{
     var email = body.GetProperty("email").GetString();
 
     var user = await userManager.FindByEmailAsync(email);
@@ -166,7 +173,8 @@ app.MapPost("/webauthn/register/options", async (JsonElement body, UserManager<A
     return Results.Ok(options);
 });
 
-app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager) => {
+app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager) =>
+{
     var user = await userManager.FindByEmailAsync(request.Email);
 
     if (user is null)
@@ -176,7 +184,8 @@ app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2
     {
         AttestationResponse = request.AttestationResponse,
         OriginalOptions = request.OriginalOptions,
-        IsCredentialIdUniqueToUserCallback = async (args, ct) => {
+        IsCredentialIdUniqueToUserCallback = async (args, ct) =>
+        {
             var id = WebEncoders.Base64UrlEncode(args.CredentialId);
             return !await db.PasskeyCredentials.AnyAsync(x => x.CredentialId == id, ct);
         }
@@ -195,7 +204,8 @@ app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2
     return Results.Ok(new { message = "PASSKEY SAVED" });
 });
 
-app.MapPost("/webauthn/login/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) => {
+app.MapPost("/webauthn/login/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) =>
+{
     var email = body.GetProperty("email").GetString();
 
     var user = await userManager.FindByEmailAsync(email);
@@ -211,7 +221,8 @@ app.MapPost("/webauthn/login/options", async (JsonElement body, UserManager<Appl
     return Results.Ok(options);
 });
 
-app.MapPost("/webauthn/login", async (AssertionRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager) => {
+app.MapPost("/webauthn/login", async (AssertionRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager) =>
+{
     var user = await userManager.FindByEmailAsync(request.Email);
 
     if (user is null)
