@@ -22,7 +22,7 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddIdentityCore<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = false)
+builder.Services.AddIdentityCore<ApplicationUser>(options => options.SignIn.RequireConfirmedAccount = false)
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddSignInManager()
@@ -83,7 +83,7 @@ app.UseCors("CorsPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapPost("/login", async ([FromBody] MinimalApi.Models.UserInfo model, UserManager<IdentityUser> userManager) =>
+app.MapPost("/login", async ([FromBody] MinimalApi.Models.UserInfo model, UserManager<ApplicationUser> userManager) =>
 {
     var user = await userManager.FindByEmailAsync(model.Email);
     if (user != null && await userManager.CheckPasswordAsync(user, model.Password))
@@ -94,13 +94,32 @@ app.MapPost("/login", async ([FromBody] MinimalApi.Models.UserInfo model, UserMa
     return Results.Unauthorized();
 });
 
+app.MapDelete("/users/{userId}", async (string userId, UserManager<ApplicationUser> userManager) =>
+{
+    var user = await userManager.FindByIdAsync(userId);
+    if (user is null)
+        return Results.NotFound("User not found");
+
+    var result = await userManager.DeleteAsync(user);
+    if (!result.Succeeded)
+        return Results.BadRequest(result.Errors);
+
+    return Results.Ok(new { message = $"User {userId} deleted" });
+}).RequireAuthorization("RequireAdministratorRole");
+
 app.MapGet("/test", (HttpContext http) =>
 {
     var name = http.User.Identity?.Name ?? "unknown";
     return Results.Ok(new { user = name });
 }).RequireAuthorization("RequireAdministratorRole");
 
-async Task<string> GenerateJwtToken(IdentityUser user, UserManager<IdentityUser> userManager)
+app.MapGet("/test2", (HttpContext http) =>
+{
+    var name = http.User.Identity?.Name ?? "unknown";
+    return Results.Ok(new { user = http.User });
+});
+
+async Task<string> GenerateJwtToken(ApplicationUser user, UserManager<ApplicationUser> userManager)
 {
     var roles = await userManager.GetRolesAsync(user);
 
