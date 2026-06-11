@@ -2,6 +2,7 @@ using BlazorApp2;
 using BlazorApp2.Components;
 using BlazorApp2.Components.Account;
 using BlazorApp2.Data;
+using BlazorApp2.Services;
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using Microsoft.AspNetCore.Components;
@@ -24,13 +25,13 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<IdentityRedirectManager>();
 builder.Services.AddScoped<AuthenticationStateProvider, IdentityRevalidatingAuthenticationStateProvider>();
 
-builder.Services.AddAuthentication();
-//builder.Services.AddAuthentication(options =>
-//    {
-//        options.DefaultScheme = IdentityConstants.ApplicationScheme;
-//        options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
-//    })
-//    .AddIdentityCookies();
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme = IdentityConstants.ApplicationScheme;
+    options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
+})
+.AddIdentityCookies();
+
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -44,6 +45,8 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddRoles<IdentityRole>()
 .AddEntityFrameworkStores<ApplicationDbContext>()
 .AddDefaultTokenProviders();
+
+builder.Services.AddScoped<IUserClaimsPrincipalFactory<ApplicationUser>, UserClaimsPrincipalFactory<ApplicationUser, IdentityRole>>();
 
 //builder.Services.AddIdentityCore<ApplicationUser>(options =>
 //    {
@@ -88,6 +91,9 @@ builder.Services.AddScoped(sp =>
     var nav = sp.GetRequiredService<NavigationManager>();
     return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
 });
+
+builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddHttpClient<ApiService>();
 
 string kestrelCertPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".aspnet/https/Test.pfx");
 string kestrelCertPassword = "test";
@@ -251,5 +257,20 @@ app.MapPost("/webauthn/login", async (AssertionRequest request, IFido2 fido2, Ap
 
     return Results.Ok();
 });
+
+using (var scope = app.Services.CreateScope())
+{
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
+    // Create Admin role if it doesn't exist
+    if (!await roleManager.RoleExistsAsync("Admin"))
+        await roleManager.CreateAsync(new IdentityRole("Admin"));
+
+    // Assign Admin role to a specific user
+    var user = await userManager.FindByEmailAsync("fff@fff.com");
+    if (user != null && !await userManager.IsInRoleAsync(user, "Admin"))
+        await userManager.AddToRoleAsync(user, "Admin");
+}
 
 app.Run();

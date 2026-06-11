@@ -113,11 +113,17 @@ app.MapGet("/test", (HttpContext http) =>
     return Results.Ok(new { user = name });
 }).RequireAuthorization("RequireAdministratorRole");
 
-app.MapGet("/test2", (HttpContext http) =>
+app.MapGet("/whoami", (HttpContext http) =>
 {
     var name = http.User.Identity?.Name ?? "unknown";
-    return Results.Ok(new { user = http.User });
-});
+    var roles = http.User.Claims
+        .Where(c => c.Type == "role")
+        .Select(c => c.Value)
+        .ToList();
+
+    return Results.Ok(new { user = name, roles });
+}).RequireAuthorization();
+
 
 async Task<string> GenerateJwtToken(ApplicationUser user, UserManager<ApplicationUser> userManager)
 {

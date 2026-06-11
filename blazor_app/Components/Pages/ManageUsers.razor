@@ -1,0 +1,76 @@
+@page "/admin/users"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Identity
+@using BlazorApp2.Data
+@using BlazorApp2.Services
+@using Microsoft.AspNetCore.Authorization
+@inject UserManager<ApplicationUser> UserManager
+@inject ApiService ApiService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject JwtTokenService JwtTokenService
+@attribute [Authorize(Roles = "Admin")]
+
+<h3>Manage Users</h3>
+
+@if (users is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Email</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var user in users)
+            {
+                <tr>
+                    <td>@user.Email</td>
+                    <td>
+                        <button class="btn btn-danger"
+                            @onclick="() => DeleteUser(user.Id)">
+                            Delete
+                        </button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (!string.IsNullOrEmpty(message))
+{
+    <p>@message</p>
+}
+
+@code {
+    private List<ApplicationUser>? users;
+    private string? message;
+    private string? jwtToken;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var email = authState.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                    ?? authState.User.Identity?.Name;
+
+        var user = await UserManager.FindByEmailAsync(email!);
+        if (user is not null)
+            jwtToken = await JwtTokenService.GenerateTokenAsync(user);
+
+        users = UserManager.Users.ToList();
+    }
+
+    private async Task DeleteUser(string userId)
+    {
+        if (jwtToken is null) return;
+        var success = await ApiService.DeleteUserAsync(userId, jwtToken);
+        message = success ? "User deleted." : "Failed to delete user.";
+        if (success)
+            users = UserManager.Users.ToList();
+    }
+}
