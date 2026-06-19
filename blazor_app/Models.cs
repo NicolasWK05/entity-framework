@@ -15,14 +15,14 @@ public class PasskeyCredential
 
 public class CredentialCreateRequest
 {
-    public string Email { get; set; } = default!;
+    public string UserName { get; set; } = default!;
     public AuthenticatorAttestationRawResponse AttestationResponse { get; set; } = default!;
     public CredentialCreateOptions OriginalOptions { get; set; } = default!;
 }
 
 public class AssertionRequest
 {
-    public string Email { get; set; } = default!;
+    public string UserName { get; set; } = default!;
     public AuthenticatorAssertionRawResponse AssertionResponse { get; set; } = default!;
     public AssertionOptions OriginalOptions { get; set; } = default!;
 }

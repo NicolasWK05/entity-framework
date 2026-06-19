@@ -3,6 +3,7 @@ using BlazorApp2.Components;
 using BlazorApp2.Components.Account;
 using BlazorApp2.Data;
 using BlazorApp2.Services;
+using BlazorApp2.Services.Hashing;
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using Microsoft.AspNetCore.Components;
@@ -25,13 +26,10 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<IdentityRedirectManager>();
 builder.Services.AddScoped<AuthenticationStateProvider, IdentityRevalidatingAuthenticationStateProvider>();
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultScheme = IdentityConstants.ApplicationScheme;
-    options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
-})
-.AddIdentityCookies();
-
+// NOTE: no separate AddAuthentication()/AddIdentityCookies() call here -
+// AddIdentity<>() below already registers the Identity.Application,
+// Identity.External etc. cookie schemes. Adding them twice throws
+// "Scheme already exists: Identity.Application" at startup.
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -40,25 +38,22 @@ builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
-    options.SignIn.RequireConfirmedAccount = true;
+    // No email confirmation flow exists anymore (email is hashed, never sent to
+    // a real inbox), so this must stay false or no one could ever sign in.
+    options.SignIn.RequireConfirmedAccount = false;
 })
 .AddRoles<IdentityRole>()
 .AddEntityFrameworkStores<ApplicationDbContext>()
+.AddUserValidator<UsernameLengthValidator>()
 .AddDefaultTokenProviders();
 
 builder.Services.AddScoped<IUserClaimsPrincipalFactory<ApplicationUser>, UserClaimsPrincipalFactory<ApplicationUser, IdentityRole>>();
 
-//builder.Services.AddIdentityCore<ApplicationUser>(options =>
-//    {
-//        options.SignIn.RequireConfirmedAccount = true;
-//        options.Stores.SchemaVersion = IdentitySchemaVersions.Version3;
-//    })
-//    .AddRoles<IdentityRole>()
-//    .AddEntityFrameworkStores<ApplicationDbContext>()
-//    .AddSignInManager()
-//    .AddDefaultTokenProviders();
-
 builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSender>();
+
+// Custom hashing service (SHA-2 / HMAC / PBKDF2 / bcrypt / Argon2id), injectable
+// into Blazor components and used here for hashing the default admin's email.
+builder.Services.AddSingleton<IHashingService, HashingService>();
 
 builder.Services.AddAuthorization(options =>
 {
@@ -91,9 +86,6 @@ builder.Services.AddScoped(sp =>
     var nav = sp.GetRequiredService<NavigationManager>();
     return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
 });
-
-builder.Services.AddScoped<JwtTokenService>();
-builder.Services.AddHttpClient<ApiService>();
 
 string kestrelCertPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".aspnet/https/Test.pfx");
 string kestrelCertPassword = "test";
@@ -146,17 +138,17 @@ app.MapAdditionalIdentityEndpoints();
 
 app.MapPost("/webauthn/register/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) =>
 {
-    var email = body.GetProperty("email").GetString();
+    var userName = body.GetProperty("userName").GetString();
 
-    var user = await userManager.FindByEmailAsync(email);
+    var user = await userManager.FindByNameAsync(userName!);
 
     if (user is null)
         return Results.BadRequest("User not found");
 
     var fidoUser = new Fido2User
     {
-        Name = user.Email!,
-        DisplayName = user.Email!,
+        Name = user.UserName!,
+        DisplayName = user.UserName!,
         Id = Encoding.UTF8.GetBytes(user.Id)
     };
 
@@ -181,7 +173,7 @@ app.MapPost("/webauthn/register/options", async (JsonElement body, UserManager<A
 
 app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager) =>
 {
-    var user = await userManager.FindByEmailAsync(request.Email);
+    var user = await userManager.FindByNameAsync(request.UserName);
 
     if (user is null)
         return Results.BadRequest("User not found");
@@ -212,9 +204,9 @@ app.MapPost("/webauthn/register", async (CredentialCreateRequest request, IFido2
 
 app.MapPost("/webauthn/login/options", async (JsonElement body, UserManager<ApplicationUser> userManager, IFido2 fido2, ApplicationDbContext db) =>
 {
-    var email = body.GetProperty("email").GetString();
+    var userName = body.GetProperty("userName").GetString();
 
-    var user = await userManager.FindByEmailAsync(email);
+    var user = await userManager.FindByNameAsync(userName!);
 
     if (user is null)
         return Results.BadRequest("User not found");
@@ -229,7 +221,7 @@ app.MapPost("/webauthn/login/options", async (JsonElement body, UserManager<Appl
 
 app.MapPost("/webauthn/login", async (AssertionRequest request, IFido2 fido2, ApplicationDbContext db, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager) =>
 {
-    var user = await userManager.FindByEmailAsync(request.Email);
+    var user = await userManager.FindByNameAsync(request.UserName);
 
     if (user is null)
         return Results.BadRequest("User not found");
@@ -262,15 +254,40 @@ using (var scope = app.Services.CreateScope())
 {
     var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var hashingService = scope.ServiceProvider.GetRequiredService<IHashingService>();
 
     // Create Admin role if it doesn't exist
     if (!await roleManager.RoleExistsAsync("Admin"))
         await roleManager.CreateAsync(new IdentityRole("Admin"));
 
-    // Assign Admin role to a specific user
-    var user = await userManager.FindByEmailAsync("fff@fff.com");
-    if (user != null && !await userManager.IsInRoleAsync(user, "Admin"))
-        await userManager.AddToRoleAsync(user, "Admin");
+    // Ensure the default admin account exists. It has no passkey yet at this
+    // point - whoever controls this account needs to complete passkey
+    // registration against username "admin" once, the first time they use it.
+    // TODO: swap "admin@example.com" for whatever the real admin email should be.
+    const string adminUserName = "admin";
+    var admin = await userManager.FindByNameAsync(adminUserName);
+
+    if (admin is null)
+    {
+        var adminEmailHash = hashingService.HashArgon2id("admin@example.com");
+
+        admin = new ApplicationUser
+        {
+            UserName = adminUserName,
+            EmailHash = adminEmailHash.HashBase64,
+            EmailSalt = adminEmailHash.SaltBase64
+        };
+
+        var createResult = await userManager.CreateAsync(admin);
+        if (!createResult.Succeeded)
+        {
+            throw new InvalidOperationException(
+                "Failed to create default admin: " + string.Join(", ", createResult.Errors.Select(e => e.Description)));
+        }
+    }
+
+    if (!await userManager.IsInRoleAsync(admin, "Admin"))
+        await userManager.AddToRoleAsync(admin, "Admin");
 }
 
 app.Run();
