@@ -1,0 +1,130 @@
+@page "/Files"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using BlazorApp2.Data
+@using BlazorApp2.Services.Hashing
+@using BlazorApp2.Components.Account.Shared
+@inject UserManager<ApplicationUser> UserManager
+@inject FileMetadataDbContext MetadataDb
+@inject IHashingService HashingService
+@inject IWebHostEnvironment Env
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>My Files</PageTitle>
+<h1>My Files</h1>
+
+<StatusMessage Message="@statusMessage" />
+
+@if (files.Count == 0)
+{
+    <p>No files have been uploaded to you yet.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>File name</th>
+                <th>Type</th>
+                <th>Uploaded</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var file in files)
+            {
+                <tr>
+                    <td>@file.FileName</td>
+                    <td>@file.FileType</td>
+                    <td>@file.UploadedAtUtc.ToLocalTime().ToString("g")</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" @onclick="() => DownloadAsync(file)" disabled="@isBusy">
+                            Download
+                        </button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<FileMetadata> files = new();
+    private string? statusMessage;
+    private bool isBusy;
+    private ApplicationUser? currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userName = authState.User.Identity?.Name;
+
+        if (userName is not null)
+        {
+            currentUser = await UserManager.FindByNameAsync(userName);
+        }
+
+        RefreshFiles();
+    }
+
+    private void RefreshFiles()
+    {
+        files = currentUser is null
+            ? new()
+            : MetadataDb.Files
+                .Where(f => f.OwnerUserId == currentUser.Id)
+                .OrderByDescending(f => f.UploadedAtUtc)
+                .ToList();
+    }
+
+    private async Task DownloadAsync(FileMetadata file)
+    {
+        if (currentUser is null)
+            return;
+
+        isBusy = true;
+        statusMessage = null;
+
+        try
+        {
+            var path = Path.Combine(Env.ContentRootPath, "Files", currentUser.UserName!, file.FileName);
+
+            if (!File.Exists(path))
+            {
+                statusMessage = $"'{file.FileName}' is missing from disk - cannot download.";
+                return;
+            }
+
+            var fileBytes = await File.ReadAllBytesAsync(path);
+            var isIntact = HashingService.VerifyFileIntegrity(fileBytes, file.IntegrityHash);
+
+            statusMessage = isIntact ? "No contamination detected" : "Contaminated";
+
+            // Hand the bytes to the browser, which saves them to the user's
+            // OS Downloads folder via a standard <a download> Blob save.
+            var base64 = Convert.ToBase64String(fileBytes);
+            await JS.InvokeVoidAsync("downloadFileFromBytes", file.FileName, file.FileType, base64);
+
+            // Per the assignment: remove the file from the user's folder (and
+            // its metadata record) after it has been downloaded.
+            File.Delete(path);
+            MetadataDb.Files.Remove(file);
+            await MetadataDb.SaveChangesAsync();
+
+            RefreshFiles();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+}

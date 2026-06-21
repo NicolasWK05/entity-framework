@@ -36,6 +36,12 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
+// File metadata lives in a separate SQLite database - deliberately a different
+// engine than the SQL Server Identity store (see FileMetadataDbContext).
+var fileMetadataConnectionString = builder.Configuration.GetConnectionString("FileMetadata") ?? throw new InvalidOperationException("Connection string 'FileMetadata' not found.");
+builder.Services.AddDbContext<FileMetadataDbContext>(options =>
+    options.UseSqlite(fileMetadataConnectionString));
+
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     // No email confirmation flow exists anymore (email is hashed, never sent to

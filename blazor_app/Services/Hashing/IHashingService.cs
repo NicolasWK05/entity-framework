@@ -33,4 +33,17 @@ public interface IHashingService
 
     /// <summary>Re-hashes <paramref name="input"/> with the stored salt and compares in constant time.</summary>
     bool VerifyArgon2id(string input, string expectedHashBase64, string saltBase64, int iterations = 4, int memorySizeKb = 65536, int parallelism = 2);
+
+    /// <summary>
+    /// Keyed HMAC-SHA256 integrity hash for uploaded file content, computed at
+    /// upload time and recomputed at download time to detect tampering. The key
+    /// comes from the FILE_INTEGRITY_KEY environment variable - randomly
+    /// generated once, never hardcoded in source. This reuses HashHmac's
+    /// underlying algorithm, which is the natural fit among the four required
+    /// methods since HMAC is specifically a *keyed* hash.
+    /// </summary>
+    string HashFileIntegrity(byte[] fileBytes);
+
+    /// <summary>Recomputes the file's HMAC and compares against the stored hash in constant time.</summary>
+    bool VerifyFileIntegrity(byte[] fileBytes, string expectedHashBase64);
 }

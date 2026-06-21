@@ -9,6 +9,7 @@
             @if (_isAdmin)
             {
                 <a href="/addroles">Add role</a>
+                <a href="/Admin/Upload" style="margin-left:8px;">Upload File</a>
             }
 
             <div class="nav-item px-3" style="display:flex; align-items:center; white-space:nowrap;">
@@ -23,6 +24,11 @@
                 }
                 <AuthorizeView>
                     <Authorized>
+                        <div class="nav-item px-3" style="display:flex; align-items:center; white-space:nowrap;">
+                            <NavLink class="nav-link" href="Files">
+                                <span class="bi bi-folder-fill-nav-menu" aria-hidden="true"></span> My Files
+                            </NavLink>
+                        </div>
                         <div class="nav-item px-3" style="display:flex; align-items:center; white-space:nowrap;">
                             <NavLink class="nav-link" href="Account/Manage">
                                 <span class="bi bi-person-fill-nav-menu" aria-hidden="true"></span> @context.User.Identity?.Name

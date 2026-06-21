@@ -8,7 +8,8 @@
       "applicationUrl": "http://localhost:5031",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "EMAIL_HASH_PEPPER": "some-long-random-dev-only-value"
+        "EMAIL_HASH_PEPPER": "some-long-random-dev-only-value",
+        "FILE_INTEGRITY_KEY": "Wu+8PBt97PmDHHs6JCo3n/cufZqFoj+Ss64y6sdDSr4="
       }
     },
     "https": {
@@ -18,7 +19,8 @@
       "applicationUrl": "https://localhost:7228;http://localhost:5031",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "EMAIL_HASH_PEPPER": "some-long-random-dev-only-value"
+        "EMAIL_HASH_PEPPER": "some-long-random-dev-only-value",
+        "FILE_INTEGRITY_KEY": "Wu+8PBt97PmDHHs6JCo3n/cufZqFoj+Ss64y6sdDSr4="
       }
     }
   }

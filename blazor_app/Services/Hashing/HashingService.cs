@@ -124,4 +124,38 @@ public sealed class HashingService : IHashingService
         // Constant-time comparison to avoid leaking match length via timing.
         return CryptographicOperations.FixedTimeEquals(expected, actual);
     }
+
+    // ---------- File integrity (HMAC, separate key from the email pepper) ----------
+    private const string FileIntegrityKeyEnvVarName = "FILE_INTEGRITY_KEY";
+
+    private static byte[] GetFileIntegrityKey()
+    {
+        var keyBase64 = Environment.GetEnvironmentVariable(FileIntegrityKeyEnvVarName);
+        if (string.IsNullOrEmpty(keyBase64))
+        {
+            throw new InvalidOperationException(
+                $"Environment variable '{FileIntegrityKeyEnvVarName}' is not set. " +
+                "Generate one with `openssl rand -base64 32` and set it as an environment " +
+                "variable - it must never be hardcoded in source.");
+        }
+        return Convert.FromBase64String(keyBase64);
+    }
+
+    public string HashFileIntegrity(byte[] fileBytes)
+    {
+        var key = GetFileIntegrityKey();
+        using var hmac = new HMACSHA256(key);
+        var hash = hmac.ComputeHash(fileBytes);
+        return Convert.ToBase64String(hash);
+    }
+
+    public bool VerifyFileIntegrity(byte[] fileBytes, string expectedHashBase64)
+    {
+        var actualHashBase64 = HashFileIntegrity(fileBytes);
+
+        var expected = Convert.FromBase64String(expectedHashBase64);
+        var actual = Convert.FromBase64String(actualHashBase64);
+
+        return CryptographicOperations.FixedTimeEquals(expected, actual);
+    }
 }

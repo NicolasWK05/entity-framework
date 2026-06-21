@@ -1,0 +1,109 @@
+@page "/dev/promote-admin"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.AspNetCore.Components.Authorization
+@using BlazorApp2.Data
+@using BlazorApp2.Components.Account.Shared
+@inject UserManager<ApplicationUser> UserManager
+@inject SignInManager<ApplicationUser> SignInManager
+@inject RoleManager<IdentityRole> RoleManager
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IWebHostEnvironment Env
+
+<PageTitle>Dev: Promote to Admin</PageTitle>
+
+@if (!Env.IsDevelopment())
+{
+    <h1>Not available</h1>
+    <p>This page only works when ASPNETCORE_ENVIRONMENT is "Development".</p>
+}
+else
+{
+    <h1>⚠ Dev-only: Promote yourself to Admin</h1>
+    <p style="color:#b00020;">
+        This page exists purely for local testing. It lets any logged-in user grant
+        themselves the Admin role in one click. <strong>Delete this file before
+        submitting or deploying</strong> - leaving it in defeats the entire purpose
+        of role-gated admin access.
+    </p>
+
+    <StatusMessage Message="@statusMessage" />
+
+    @if (currentUser is null)
+    {
+        <p>Could not resolve the current user.</p>
+    }
+    else
+    {
+        <p>Logged in as <strong>@currentUser.UserName</strong>.</p>
+        <p>Currently Admin: <strong>@(isAdmin ? "Yes" : "No")</strong></p>
+
+        @if (!isAdmin)
+        {
+            <button class="btn btn-danger" @onclick="PromoteAsync" disabled="@isBusy">
+                @(isBusy ? "Working..." : "Make me Admin")
+            </button>
+        }
+    }
+}
+
+@code {
+    private ApplicationUser? currentUser;
+    private bool isAdmin;
+    private bool isBusy;
+    private string? statusMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Env.IsDevelopment())
+            return;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userName = authState.User.Identity?.Name;
+
+        if (userName is not null)
+        {
+            currentUser = await UserManager.FindByNameAsync(userName);
+            if (currentUser is not null)
+            {
+                isAdmin = await UserManager.IsInRoleAsync(currentUser, "Admin");
+            }
+        }
+    }
+
+    private async Task PromoteAsync()
+    {
+        if (currentUser is null)
+            return;
+
+        isBusy = true;
+        statusMessage = null;
+
+        try
+        {
+            if (!await RoleManager.RoleExistsAsync("Admin"))
+                await RoleManager.CreateAsync(new IdentityRole("Admin"));
+
+            var result = await UserManager.AddToRoleAsync(currentUser, "Admin");
+
+            if (result.Succeeded)
+            {
+                // Refresh the auth cookie so the new role claim takes effect
+                // immediately, without requiring a full logout/login.
+                await SignInManager.RefreshSignInAsync(currentUser);
+                isAdmin = true;
+                statusMessage = "Done - you are now an Admin.";
+            }
+            else
+            {
+                statusMessage = "Error: " + string.Join(", ", result.Errors.Select(e => e.Description));
+            }
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+}

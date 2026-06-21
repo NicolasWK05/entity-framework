@@ -1,0 +1,120 @@
+@page "/Admin/Upload"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = "RequireAdministratorRole")]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using BlazorApp2.Data
+@using BlazorApp2.Services.Hashing
+@using BlazorApp2.Components.Account.Shared
+@inject UserManager<ApplicationUser> UserManager
+@inject FileMetadataDbContext MetadataDb
+@inject IHashingService HashingService
+@inject IWebHostEnvironment Env
+
+<PageTitle>Upload File</PageTitle>
+<h1>Upload a file to a user</h1>
+
+<StatusMessage Message="@statusMessage" />
+
+<div class="mb-3">
+    <label for="recipient" class="form-label">Recipient</label>
+    <select id="recipient" class="form-select" @bind="SelectedUserId">
+        <option value="">-- select a user --</option>
+        @foreach (var user in recipients)
+        {
+            <option value="@user.Id">@user.UserName</option>
+        }
+    </select>
+</div>
+
+<div class="mb-3">
+    <label class="form-label">File</label>
+    <InputFile OnChange="OnFileSelected" />
+</div>
+
+<button class="btn btn-primary" @onclick="UploadAsync" disabled="@(string.IsNullOrEmpty(SelectedUserId) || selectedFile is null || isUploading)">
+    @(isUploading ? "Uploading..." : "Upload")
+</button>
+
+@code {
+    private const long MaxFileSizeBytes = 50 * 1024 * 1024; // 50 MB
+
+    private List<ApplicationUser> recipients = new();
+    private string? SelectedUserId;
+    private IBrowserFile? selectedFile;
+    private string? statusMessage;
+    private bool isUploading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var adminUsers = await UserManager.GetUsersInRoleAsync("Admin");
+        var adminIds = adminUsers.Select(u => u.Id).ToHashSet();
+
+        // Admins are excluded from the recipient list - only regular employees
+        // can have files uploaded to them.
+        recipients = await UserManager.Users
+            .Where(u => !adminIds.Contains(u.Id))
+            .OrderBy(u => u.UserName)
+            .ToListAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (SelectedUserId is null || selectedFile is null)
+            return;
+
+        isUploading = true;
+        statusMessage = null;
+
+        try
+        {
+            var recipient = await UserManager.FindByIdAsync(SelectedUserId);
+            if (recipient is null)
+            {
+                statusMessage = "Error: recipient not found.";
+                return;
+            }
+
+            using var stream = selectedFile.OpenReadStream(MaxFileSizeBytes);
+            using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream);
+            var fileBytes = memoryStream.ToArray();
+
+            var integrityHash = HashingService.HashFileIntegrity(fileBytes);
+
+            var userFolder = Path.Combine(Env.ContentRootPath, "Files", recipient.UserName!);
+            Directory.CreateDirectory(userFolder);
+
+            var destinationPath = Path.Combine(userFolder, selectedFile.Name);
+            await File.WriteAllBytesAsync(destinationPath, fileBytes);
+
+            MetadataDb.Files.Add(new FileMetadata
+            {
+                OwnerUserId = recipient.Id,
+                FileName = selectedFile.Name,
+                FileType = selectedFile.ContentType,
+                IntegrityHash = integrityHash
+            });
+            await MetadataDb.SaveChangesAsync();
+
+            statusMessage = $"Uploaded '{selectedFile.Name}' to {recipient.UserName}.";
+            selectedFile = null;
+            SelectedUserId = null;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+}
