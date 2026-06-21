@@ -15,6 +15,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,6 +61,13 @@ builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSe
 // Custom hashing service (SHA-2 / HMAC / PBKDF2 / bcrypt / Argon2id), injectable
 // into Blazor components and used here for hashing the default admin's email.
 builder.Services.AddSingleton<IHashingService, HashingService>();
+
+// RSA/AES handlers for the encrypted file transfer from the separate
+// "Fil overførsel app". Data Protection wraps the persisted RSA private key
+// at rest (AES + HMAC internally).
+builder.Services.AddDataProtection();
+builder.Services.AddSingleton<RsaHandler>();
+builder.Services.AddSingleton<AesHandler>();
 
 builder.Services.AddAuthorization(options =>
 {
@@ -132,6 +140,9 @@ else
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.UseAntiforgery();
 
@@ -254,6 +265,75 @@ app.MapPost("/webauthn/login", async (AssertionRequest request, IFido2 fido2, Ap
     await signInManager.SignInAsync(user, isPersistent: true);
 
     return Results.Ok();
+});
+
+app.MapGet("/rsa/public-key", (RsaHandler rsaHandler) =>
+{
+    return Results.Ok(new { publicKeyPem = rsaHandler.ExportPublicKeyPem() });
+});
+
+app.MapPost("/files/receive-encrypted", async (
+    EncryptedFileUploadRequest request,
+    RsaHandler rsaHandler,
+    AesHandler aesHandler,
+    UserManager<ApplicationUser> userManager,
+    FileMetadataDbContext metadataDb,
+    IHashingService hashingService,
+    IWebHostEnvironment env) =>
+{
+    // STEP 1: RSA-OAEP decrypt the one-time AES key using our private key.
+    byte[] aesKey;
+    try
+    {
+        var encryptedAesKey = Convert.FromBase64String(request.EncryptedAesKeyBase64);
+        aesKey = rsaHandler.Decrypt(encryptedAesKey);
+    }
+    catch (CryptographicException)
+    {
+        return Results.BadRequest("Could not decrypt the AES key.");
+    }
+
+    // STEP 2: AES-GCM decrypt the file content. This also verifies the GCM
+    // authentication tag, so tampering with the file in transit is caught
+    // here as a CryptographicException, not silently accepted.
+    byte[] fileBytes;
+    try
+    {
+        var cipherText = Convert.FromBase64String(request.CipherTextBase64);
+        var nonce = Convert.FromBase64String(request.NonceBase64);
+        var tag = Convert.FromBase64String(request.TagBase64);
+        fileBytes = aesHandler.Decrypt(cipherText, aesKey, nonce, tag);
+    }
+    catch (CryptographicException)
+    {
+        return Results.BadRequest("Decryption failed - the file may have been tampered with in transit.");
+    }
+
+    // STEP 3: feed into the existing upload pipeline - same integrity hash,
+    // same storage location, same metadata record as a normal admin upload,
+    // owned by the admin account so it shows up in the admin's own file list.
+    var admin = await userManager.FindByNameAsync("admin");
+    if (admin is null)
+        return Results.Problem("Default admin account not found.");
+
+    var integrityHash = hashingService.HashFileIntegrity(fileBytes);
+
+    var adminFolder = Path.Combine(env.ContentRootPath, "Files", admin.UserName!);
+    Directory.CreateDirectory(adminFolder);
+
+    var destinationPath = Path.Combine(adminFolder, request.FileName);
+    await File.WriteAllBytesAsync(destinationPath, fileBytes);
+
+    metadataDb.Files.Add(new FileMetadata
+    {
+        OwnerUserId = admin.Id,
+        FileName = request.FileName,
+        FileType = request.FileType,
+        IntegrityHash = integrityHash
+    });
+    await metadataDb.SaveChangesAsync();
+
+    return Results.Ok(new { message = "File received and decrypted successfully." });
 });
 
 using (var scope = app.Services.CreateScope())
